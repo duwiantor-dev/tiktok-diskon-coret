@@ -1,5 +1,6 @@
 import io
 import re
+import zipfile
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple
 
@@ -10,7 +11,7 @@ from openpyxl.cell.cell import MergedCell
 
 
 # =========================
-# FIXED TEMPLATE SPECS
+# FIXED SPECS
 # =========================
 INPUT_HEADER_ROW = 3
 INPUT_DATA_START_ROW = 6
@@ -18,30 +19,26 @@ INPUT_DATA_START_ROW = 6
 OUTPUT_HEADER_ROW = 1
 OUTPUT_DATA_START_ROW = 2
 
-# =========================
-# INPUT HEADERS (row 3)
-# =========================
-IN_HDR_PRODUCT_ID_CANDS = ["ID Produk", "ID PRODUK", "Product ID", "Product_Id", "Product_id"]
-IN_HDR_ID_SKU_CANDS = ["ID SKU", "ID_SKU", "Sku Id", "SKU ID", "SKU_Id", "SKU_id"]
-IN_HDR_PRICE_CANDS = ["Harga Ritel (Mata Uang Lokal)", "Harga Ritel", "Harga", "PRICE"]
-IN_HDR_STOCK_CANDS = ["Kuantitas", "Qty", "QTY", "Stock", "Stok"]
-IN_HDR_SKU_PENJUAL_CANDS = ["SKU Penjual", "SKU_PENJUAL", "SKU PENJUAL", "Seller SKU", "SKU Seller"]
+MAX_ROWS_PER_OUTPUT_FILE = 1000  # ✅ tiktok max 1000 baris per template
+
 
 # =========================
-# OUTPUT HEADERS (row 1) - MUST match template image atas
+# OUTPUT HEADERS (MUST EXACT MATCH TEMPLATE UPLOADED)
+# (diambil dari file Product Discount.xlsx kamu)
 # =========================
 OUT_COL_A = "Product_id (wajib)"
 OUT_COL_B = "SKU_id (wajib)"
 OUT_COL_C = "Harga Penawaran (wajib)"
-OUT_COL_D = "Total Stok Promosi (optional)\n1. Total Stok Promosi≤ Stok\n2. Jika tidak diisi artinya tidak terbatas"
-OUT_COL_E = "Batas Pembelian (optional)\n1. 1 ≤ Batas pembelian≤99\n2. Jika tidak diisi artinya tidak terbatas"
+OUT_COL_D = "Total Stok Promosi (opsional)\n1. Total Stok Promosi≤ Stok \n2. Jika tidak diisi artinya tidak terbatas"
+OUT_COL_E = "Batas Pembelian (opsional)\n1. 1 ≤ Batas pembelian≤ 99\n2. Jika tidak diisi artinya tidak terbatas"
+
 
 # =========================
 # PRICELIST / ADDON
 # =========================
 PRICELIST_HEADER_ROW_FIXED = 2
 PL_HEADER_SKU_CANDIDATES = ["KODEBARANG", "KODE BARANG", "SKU", "SKU NO", "SKU_NO", "KODEBARANG "]
-PL_PRICE_COL_M3 = "M3"  # harga selalu M3
+PL_PRICE_COL_M3 = "M3"  # ✅ selalu M3
 
 ADDON_CODE_CANDIDATES = ["addon_code", "ADDON_CODE", "Addon Code", "Kode", "KODE", "KODE ADDON", "KODE_ADDON"]
 ADDON_PRICE_CANDIDATES = ["harga", "HARGA", "Price", "PRICE", "Harga"]
@@ -144,16 +141,14 @@ def safe_set_cell_value(ws, row: int, col: int, value):
 
 
 def lower_map_headers(ws, header_row: int) -> Dict[str, int]:
-    row_vals = []
+    m = {}
     for c in range(1, ws.max_column + 1):
         v = ws.cell(row=header_row, column=c).value
-        row_vals.append("" if v is None else str(v).strip())
-
-    m = {}
-    for idx, v in enumerate(row_vals, start=1):
-        lv = v.strip().lower()
-        if lv and lv not in m:
-            m[lv] = idx
+        if v is None:
+            continue
+        key = str(v).strip().lower()
+        if key and key not in m:
+            m[key] = c
     return m
 
 
@@ -164,6 +159,15 @@ def find_col_by_candidates(ws, header_row: int, candidates: List[str]) -> Option
         if key in m:
             return m[key]
     return None
+
+
+def excel_col(letter: str) -> int:
+    # A=1, B=2 ...
+    letter = letter.upper().strip()
+    n = 0
+    for ch in letter:
+        n = n * 26 + (ord(ch) - ord("A") + 1)
+    return n
 
 
 # =========================
@@ -289,33 +293,36 @@ def compute_new_price_for_row(
 
 
 # =========================
-# Output workbook builder
+# Output workbook builder (template exact header)
 # =========================
 def build_output_workbook(rows: List[Dict[str, object]]) -> bytes:
     wb = Workbook()
     ws = wb.active
     ws.title = "Sheet1"
 
-    # Header row 1 (template atas)
+    # Exact header row 1
     ws.cell(row=OUTPUT_HEADER_ROW, column=1).value = OUT_COL_A
     ws.cell(row=OUTPUT_HEADER_ROW, column=2).value = OUT_COL_B
     ws.cell(row=OUTPUT_HEADER_ROW, column=3).value = OUT_COL_C
     ws.cell(row=OUTPUT_HEADER_ROW, column=4).value = OUT_COL_D
     ws.cell(row=OUTPUT_HEADER_ROW, column=5).value = OUT_COL_E
 
-    # Data start row 2
     r = OUTPUT_DATA_START_ROW
     for it in rows:
         ws.cell(row=r, column=1).value = it.get("product_id", "")
         ws.cell(row=r, column=2).value = it.get("id_sku", "")
         ws.cell(row=r, column=3).value = it.get("harga", "")
         ws.cell(row=r, column=4).value = it.get("stok", "")
-        # kolom E dibiarkan kosong sesuai permintaan
+        # kolom E kosong
         r += 1
 
     out = io.BytesIO()
     wb.save(out)
     return out.getvalue()
+
+
+def chunk_list(items: List[dict], size: int) -> List[List[dict]]:
+    return [items[i:i + size] for i in range(0, len(items), size)]
 
 
 # =========================
@@ -358,32 +365,50 @@ if process:
     wb_in = load_workbook(io.BytesIO(input_file.getvalue()), data_only=True)
     ws_in = wb_in.active
 
-    # Find required columns in input header row 3
-    col_product_id = find_col_by_candidates(ws_in, INPUT_HEADER_ROW, IN_HDR_PRODUCT_ID_CANDS)
-    col_id_sku = find_col_by_candidates(ws_in, INPUT_HEADER_ROW, IN_HDR_ID_SKU_CANDS)
-    col_price = find_col_by_candidates(ws_in, INPUT_HEADER_ROW, IN_HDR_PRICE_CANDS)
-    col_stock = find_col_by_candidates(ws_in, INPUT_HEADER_ROW, IN_HDR_STOCK_CANDS)
-    col_sku_penjual = find_col_by_candidates(ws_in, INPUT_HEADER_ROW, IN_HDR_SKU_PENJUAL_CANDS)
+    # ---------
+    # INPUT COLUMNS:
+    # Try detect by header row 3, if fail fallback to fixed columns
+    # Fixed (sesuai requirement + template input tiktok):
+    #   A=ID Produk, D=ID SKU, F=Harga, G=Kuantitas
+    #   SKU Penjual biasanya H, tapi kalau nggak ada coba E
+    # ---------
+    # fallback fixed
+    col_product_id = excel_col("A")
+    col_id_sku = excel_col("D")
+    col_price = excel_col("F")
+    col_stock = excel_col("G")
+    col_sku_penjual = excel_col("H")  # utama
 
-    missing = []
-    if col_product_id is None:
-        missing.append("ID Produk")
-    if col_id_sku is None:
-        missing.append("ID SKU")
-    if col_price is None:
-        missing.append("Harga Ritel (Mata Uang Lokal)")
-    if col_stock is None:
-        missing.append("Kuantitas")
-    if col_sku_penjual is None:
-        missing.append("SKU Penjual")
+    # optional: try header based (lebih aman kalau layout berubah)
+    try:
+        # kalau header row 3 bisa dibaca, kita cari SKU Penjual biar pasti
+        hdr_map = lower_map_headers(ws_in, INPUT_HEADER_ROW)
 
-    if missing:
-        st.error(
-            "Header input (row 3) tidak ketemu untuk kolom: "
-            + ", ".join(missing)
-            + ". Pastikan sesuai template."
-        )
-        st.stop()
+        # kalau ada "sku penjual" di header, override col_sku_penjual
+        for key in ["sku penjual", "seller sku", "sku seller"]:
+            if key in hdr_map:
+                col_sku_penjual = hdr_map[key]
+                break
+
+        # kalau ternyata file ini SKU Penjual ada di E (atau header-nya ketemu), coba fallback E
+        # (lebih aman buat variasi template)
+        if col_sku_penjual is None:
+            col_sku_penjual = excel_col("E")
+    except Exception:
+        # tetap pakai fallback fixed
+        pass
+
+    # fallback tambahan: kalau kolom H kosong semua, coba E
+    def col_is_all_empty(col_idx: int, start_row: int, end_row: int) -> bool:
+        for rr in range(start_row, min(end_row, start_row + 50) + 1):
+            v = ws_in.cell(row=rr, column=col_idx).value
+            if v is not None and str(v).strip() != "":
+                return False
+        return True
+
+    if col_is_all_empty(col_sku_penjual, INPUT_DATA_START_ROW, ws_in.max_row):
+        # coba E
+        col_sku_penjual = excel_col("E")
 
     output_rows: List[Dict[str, object]] = []
     issues: List[Dict[str, object]] = []
@@ -392,12 +417,11 @@ if process:
         product_id = parse_number_like_id(ws_in.cell(row=r, column=col_product_id).value)
         id_sku = parse_number_like_id(ws_in.cell(row=r, column=col_id_sku).value)
 
-        # harga input (kolom F) tidak dipakai sebagai final, tapi bisa dipakai sebagai referensi issue
         old_price_raw = parse_price_cell(ws_in.cell(row=r, column=col_price).value)
         old_price = int(old_price_raw) if old_price_raw is not None else 0
 
         stok_raw = ws_in.cell(row=r, column=col_stock).value
-        stok = parse_price_cell(stok_raw)  # qty biasanya angka bulat
+        stok = parse_price_cell(stok_raw)
         stok = int(stok) if stok is not None else ""
 
         sku_penjual = parse_number_like_id(ws_in.cell(row=r, column=col_sku_penjual).value)
@@ -431,8 +455,8 @@ if process:
             "stok": stok,
         })
 
-    # Preview hasil output (sesuai kolom output)
-    st.subheader("Hasil Output (Preview) — sesuai template gambar atas")
+    # Preview
+    st.subheader("Hasil Output (Preview) — sesuai template Tiktok (max 1000 baris per file)")
     if not output_rows:
         st.warning("Tidak ada baris valid untuk di-generate (cek SKU Penjual / Pricelist / Addon).")
     else:
@@ -440,13 +464,30 @@ if process:
         df_out.columns = ["Product_id", "SKU_id", "Harga Penawaran", "Total Stok Promosi"]
         st.dataframe(df_out, use_container_width=True, height=420)
 
-        out_xlsx = build_output_workbook(output_rows)
-        st.download_button(
-            "Download Output XLSX (template gambar atas)",
-            data=out_xlsx,
-            file_name="product_discount_output_M3.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        )
+        # Chunk output max 1000 rows per file
+        chunks = chunk_list(output_rows, MAX_ROWS_PER_OUTPUT_FILE)
+
+        if len(chunks) == 1:
+            out_xlsx = build_output_workbook(chunks[0])
+            st.download_button(
+                "Download Output XLSX",
+                data=out_xlsx,
+                file_name="Product Discount.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            )
+        else:
+            zbuf = io.BytesIO()
+            with zipfile.ZipFile(zbuf, "w", zipfile.ZIP_DEFLATED) as zf:
+                for i, ch in enumerate(chunks, start=1):
+                    out_xlsx = build_output_workbook(ch)
+                    zf.writestr(f"Product Discount {i}.xlsx", out_xlsx)
+
+            st.download_button(
+                f"Download Output (ZIP) — {len(chunks)} file",
+                data=zbuf.getvalue(),
+                file_name="Product Discount.zip",
+                mime="application/zip",
+            )
 
     # Issues
     if issues:
