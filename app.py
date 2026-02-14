@@ -1,7 +1,6 @@
 import io
 import re
 import zipfile
-from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple
 
 import pandas as pd
@@ -341,6 +340,10 @@ with c3:
 
 st.divider()
 discount_rp = st.number_input("Diskon (Rp) - mengurangi harga final", min_value=0, value=0, step=1000)
+
+# ✅ Tambahan opsi: hanya output yang berubah harga
+only_changed = st.checkbox("Hanya SKU yang berubah harga", value=True)
+
 process = st.button("Proses")
 
 if process:
@@ -381,21 +384,16 @@ if process:
 
     # optional: try header based (lebih aman kalau layout berubah)
     try:
-        # kalau header row 3 bisa dibaca, kita cari SKU Penjual biar pasti
         hdr_map = lower_map_headers(ws_in, INPUT_HEADER_ROW)
 
-        # kalau ada "sku penjual" di header, override col_sku_penjual
         for key in ["sku penjual", "seller sku", "sku seller"]:
             if key in hdr_map:
                 col_sku_penjual = hdr_map[key]
                 break
 
-        # kalau ternyata file ini SKU Penjual ada di E (atau header-nya ketemu), coba fallback E
-        # (lebih aman buat variasi template)
         if col_sku_penjual is None:
             col_sku_penjual = excel_col("E")
     except Exception:
-        # tetap pakai fallback fixed
         pass
 
     # fallback tambahan: kalau kolom H kosong semua, coba E
@@ -407,11 +405,13 @@ if process:
         return True
 
     if col_is_all_empty(col_sku_penjual, INPUT_DATA_START_ROW, ws_in.max_row):
-        # coba E
         col_sku_penjual = excel_col("E")
 
     output_rows: List[Dict[str, object]] = []
     issues: List[Dict[str, object]] = []
+
+    total_valid = 0
+    total_changed = 0
 
     for r in range(INPUT_DATA_START_ROW, ws_in.max_row + 1):
         product_id = parse_number_like_id(ws_in.cell(row=r, column=col_product_id).value)
@@ -448,6 +448,15 @@ if process:
             })
             continue
 
+        total_valid += 1
+
+        # ✅ FILTER: hanya yang berubah harga
+        if only_changed and int(new_price) == int(old_price):
+            continue
+
+        if int(new_price) != int(old_price):
+            total_changed += 1
+
         output_rows.append({
             "product_id": product_id,
             "id_sku": id_sku,
@@ -457,8 +466,10 @@ if process:
 
     # Preview
     st.subheader("Hasil Output (Preview) — sesuai template Tiktok (max 1000 baris per file)")
+    st.caption(f"Baris valid dihitung: {total_valid} | Baris masuk output: {len(output_rows)} | Baris berubah harga: {total_changed}")
+
     if not output_rows:
-        st.warning("Tidak ada baris valid untuk di-generate (cek SKU Penjual / Pricelist / Addon).")
+        st.warning("Tidak ada SKU yang berubah harga (atau tidak ada baris valid). Coba matikan checkbox 'Hanya SKU yang berubah harga' untuk cek semua output.")
     else:
         df_out = pd.DataFrame(output_rows, columns=["product_id", "id_sku", "harga", "stok"])
         df_out.columns = ["Product_id", "SKU_id", "Harga Penawaran", "Total Stok Promosi"]
@@ -495,4 +506,3 @@ if process:
         st.subheader("Issues (baris yang gagal dihitung)")
         df_issues = pd.DataFrame(issues)
         st.dataframe(df_issues, use_container_width=True, height=260)
-
