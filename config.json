@@ -1,0 +1,14 @@
+{
+  "mass_update": {
+    "sku_column_candidates": ["SKU", "Sku", "sku"],
+    "price_column_candidates": ["Harga", "price", "Price"]
+  },
+  "pricelist": {
+    "sku_column_candidates": ["KODEBARANG", "SKU", "SKU NO", "KodeBarang"],
+    "price_column_preference": ["M4", "M3", "M2", "SRP"]
+  },
+  "rules": {
+    "margin_percent": 0.0,
+    "round_to": 1000
+  }
+}
