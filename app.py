@@ -328,16 +328,16 @@ def chunk_list(items: List[dict], size: int) -> List[List[dict]]:
 # =========================
 # Streamlit UI
 # =========================
-st.set_page_config(page_title="Generate Product Discount (Harga selalu M3)", layout="wide")
-st.title("Generate Product Discount (Harga selalu M3)")
+st.set_page_config(page_title="Harga Coret Tiktok", layout="wide")
+st.title("Harga Coret Tiktok")
 
 c1, c2, c3 = st.columns(3)
 with c1:
-    input_file = st.file_uploader("Upload File Input (Template bawah)", type=["xlsx"])
+    input_file = st.file_uploader("Upload File Tiktok", type=["xlsx"])
 with c2:
     pl_file = st.file_uploader("Upload Pricelist", type=["xlsx"])
 with c3:
-    addon_file = st.file_uploader("Upload Addon Mapping", type=["xlsx"])
+    addon_file = st.file_uploader("Upload Addon", type=["xlsx"])
 
 st.divider()
 discount_rp = st.number_input("Diskon (Rp) - mengurangi harga final", min_value=0, value=0, step=1000)
@@ -495,3 +495,4 @@ if process:
         st.subheader("Issues (baris yang gagal dihitung)")
         df_issues = pd.DataFrame(issues)
         st.dataframe(df_issues, use_container_width=True, height=260)
+
